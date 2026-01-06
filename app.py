@@ -1,6 +1,5 @@
 import streamlit as st
-from langchain_openai import ChatOpenAI
-from langchain.schema import SystemMessage, HumanMessage
+import openai
 
 # --- 関数定義：LLMへの問い合わせ ---
 def generate_response(input_text, role_selection, api_key):
@@ -22,29 +21,71 @@ def generate_response(input_text, role_selection, api_key):
         簡潔かつ具体的で、少し厳しいくらいの改善策を提示してください。
         """
 
-    # 2. LangChainのChatOpenAIモデルを初期化
-    llm = ChatOpenAI(
-        openai_api_key=api_key,
-        model_name="gpt-4o-mini", # コストパフォーマンスの良いモデル
-        temperature=0.7
-    )
-
-    # 3. メッセージリストの作成
+    # 2. OpenAI SDK を直接呼び出して回答を取得
     messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=input_text)
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": input_text}
     ]
 
-    # 4. LLMを実行して回答を取得
-    result = llm.invoke(messages)
-    
-    # 5. 回答のテキスト部分だけを戻り値として返す
-    return result.content
+    # OpenAI Python SDK のバージョン違いに対応する（新しいクライアント API を優先）
+    try:
+        # 新しい API（openai>=1.x）の場合
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.7,
+        )
+    except Exception:
+        # 古い互換 API にフォールバック
+        openai.api_key = api_key
+        # 一部の openai パッケージでは ChatCompletion が名前空間にない場合があるため安全に呼ぶ
+        if hasattr(openai, 'ChatCompletion'):
+            resp = openai.ChatCompletion.create(  # type: ignore[attr-defined]
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0.7,
+            )
+        else:
+            # さらに古い互換や包装ライブラリ向けに http request を直接呼ぶ簡易実装
+            resp = openai.Completion.create(  # type: ignore[attr-defined]
+                model="gpt-4o-mini",
+                prompt='\n'.join([m['content'] for m in messages]),
+                temperature=0.7,
+            )
+
+    # レスポンスから本文を安全に取り出す
+    choice = None
+    try:
+        choice = resp.choices[0]
+    except Exception:
+        pass
+
+    # いくつかの形に対応して content を取得
+    content = None
+    if choice is not None:
+        # dataclass/obj style
+        if hasattr(choice, 'message'):
+            msg = choice.message
+            content = getattr(msg, 'content', None) or (msg.get('content') if isinstance(msg, dict) else None)
+        # dict style
+        elif isinstance(choice, dict):
+            content = choice.get('message', {}).get('content') or choice.get('text')
+
+    return content if content is not None else str(resp)
 
 
 # ==========================================
 # ここからメインの画面表示処理
 # ==========================================
+
+# dotenv は任意（無ければ無視）
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
 # ページの設定
 st.set_page_config(page_title="AIアドバイザー切り替えアプリ", page_icon="🤖")
@@ -102,8 +143,3 @@ if st.button("AIに相談する"):
                 
             except Exception as e:
                 st.error(f"エラーが発生しました: {e}")
-
-
-from dotenv import load_dotenv
-
-load_dotenv()
