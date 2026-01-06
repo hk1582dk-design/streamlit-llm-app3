@@ -22,3 +22,4 @@ streamlit==1.26.1
 # LangChain (必要な場合のみ)
 langchain==1.2.0
 langchain-openai==0.3.0
+langchain-openai
